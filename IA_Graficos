@@ -1,0 +1,757 @@
+import os
+import tensorflow as tf
+import warnings
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from pathlib import Path
+import logging
+from time import sleep
+from geopy.geocoders import Nominatim
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.preprocessing import StandardScaler, LabelEncoder, MinMaxScaler
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVR
+import unicodedata
+import re
+import folium
+import webbrowser
+import numpy as np
+import matplotlib.dates as mdates
+
+# Configuración para silenciar logs de TensorFlow
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Silencia todos los mensajes menos los errores fatales
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # Desactiva las optimizaciones personalizadas de oneDNN
+
+# Silenciar advertencias en general
+warnings.filterwarnings('ignore')
+
+# Configuración del registro
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Directorio de salida
+OUTPUT_DIR = Path("output")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# Geolocalizador
+geolocator = Nominatim(user_agent="geoapiExercises")
+
+
+class FileHandler:
+    """Clase para manejar la carga y validación de archivos CSV."""
+
+    @staticmethod
+    def cargar_csv():
+        """Carga un archivo CSV en un DataFrame de pandas."""
+        file_path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
+        if file_path:
+            try:
+                df = pd.read_csv(file_path)
+                df.columns = df.columns.str.strip()  # Limpiar espacios en blanco de los nombres de columnas
+                logging.info(f"Archivo CSV cargado: {file_path}")
+                messagebox.showinfo("Cargar CSV", "Archivo CSV cargado exitosamente.")
+                return df
+            except pd.errors.EmptyDataError:
+                logging.error("El archivo CSV está vacío.")
+                messagebox.showerror("Error", "El archivo CSV está vacío.")
+            except pd.errors.ParserError:
+                logging.error("Error de análisis en el archivo CSV.")
+                messagebox.showerror("Error", "Error de análisis en el archivo CSV.")
+            except Exception as e:
+                logging.error(f"Error al cargar el archivo CSV: {e}")
+                messagebox.showerror("Error", f"Ocurrió un error al cargar el archivo CSV: {e}")
+        return pd.DataFrame()
+
+
+class DataPreprocessing:
+    """Clase para la normalización y preprocesamiento de datos."""
+
+    @staticmethod
+    def normalize_text(text):
+        """Normaliza el texto eliminando caracteres especiales y acentos."""
+        text = unicodedata.normalize('NFD', text).encode('ascii', 'ignore').decode('utf-8')
+        text = re.sub(r'[^\w\s]', '', text)  # Elimina caracteres especiales
+        text = text.lower().strip()  # Convierte a minúsculas y elimina espacios en blanco
+        return text
+
+    @staticmethod
+    def denormalize_text(normalized_text, original_texts):
+        """Denormaliza el texto buscando su versión original en la lista de textos."""
+        for text in original_texts:
+            if DataPreprocessing.normalize_text(text) == normalized_text:
+                return text
+        return None
+
+
+class Visualization:
+    """Clase para la visualización de datos."""
+
+    @staticmethod
+    def plot_bar_chart(data, title, xlabel, ylabel, output_file):
+        """Genera una gráfica de barras."""
+        plt.figure(figsize=(12, 8))
+        data.plot(kind='bar', color='skyblue')
+        plt.title(title)
+        plt.ylabel(ylabel)
+        plt.xlabel(xlabel)
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig(output_file)
+        plt.show()
+        logging.info(f"Gráfica guardada en {output_file}")
+
+    @staticmethod
+    def plot_evolution_by_campaign(df):
+        """Genera gráficos de evolución de la superficie sembrada y cosechada, producción, y rendimiento promedio por campaña."""
+        df['campaña_inicio'] = df['campaña'].apply(lambda x: int(x.split('/')[0]))
+
+        grouped_data = df.groupby('campaña_inicio').agg({
+            'sup_sembrada': 'sum',
+            'sup_cosechada': 'sum',
+            'produccion': 'sum',
+            'rendimiento': 'mean'
+        }).reset_index()
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(grouped_data['campaña_inicio'], grouped_data['sup_sembrada'], label='Superficie Sembrada')
+        plt.plot(grouped_data['campaña_inicio'], grouped_data['sup_cosechada'], label='Superficie Cosechada')
+        plt.xlabel('Campaña')
+        plt.ylabel('Superficie (ha)')
+        plt.title('Evolución de la Superficie Sembrada y Cosechada por Campaña')
+        plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+        plt.gca().xaxis.set_major_locator(mdates.YearLocator(5))
+        plt.gcf().autofmt_xdate()
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(grouped_data['campaña_inicio'], grouped_data['produccion'], label='Producción', color='orange')
+        plt.xlabel('Campaña')
+        plt.ylabel('Producción (toneladas)')
+        plt.title('Evolución de la Producción por Campaña')
+        plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+        plt.gca().xaxis.set_major_locator(mdates.YearLocator(5))
+        plt.gcf().autofmt_xdate()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(grouped_data['campaña_inicio'], grouped_data['rendimiento'], label='Rendimiento Promedio', color='green')
+        plt.xlabel('Campaña')
+        plt.ylabel('Rendimiento (kg/ha)')
+        plt.title('Evolución del Rendimiento Promedio por Campaña')
+        plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+        plt.gca().xaxis.set_major_locator(mdates.YearLocator(5))
+        plt.gcf().autofmt_xdate()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+
+
+class DataAnalyzer:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("Aplicación de Análisis de Datos")
+        self.root.geometry("600x400")
+        self.df = pd.DataFrame()
+        self.setup_menu()
+
+    def setup_menu(self):
+        """Configura el menú de la aplicación."""
+        self.menu = tk.Menu(self.root)
+        self.root.config(menu=self.menu)
+
+        self.file_menu = tk.Menu(self.menu, tearoff=0)
+        self.menu.add_cascade(label="Archivo", menu=self.file_menu)
+        self.file_menu.add_command(label="Cargar CSV", command=self.cargar_csv)
+        self.file_menu.add_command(label="Salir", command=self.root.quit)
+
+        self.analisis_menu = tk.Menu(self.menu, tearoff=0)
+        self.menu.add_cascade(label="Análisis", menu=self.analisis_menu)
+        self.analisis_menu.add_command(label="Sumar Columnas", command=self.sumar_columnas)
+        self.analisis_menu.add_command(label="Análisis Temporal", command=self.analisis_temporal)
+        self.analisis_menu.add_command(label="Análisis de Correlación", command=self.analisis_correlacion)
+        self.analisis_menu.add_command(label="Modelos Predictivos", command=self.modelos_predictivos)
+        self.analisis_menu.add_command(label="Clasificación de Cultivos", command=self.clasificacion_cultivos)
+        self.analisis_menu.add_command(label="Correlación Sup. Sembrada-Sup. Cosechada", command=self.correlacion_sup_sembrada_cosechada)
+        self.analisis_menu.add_command(label="Producción Total por Provincia", command=self.produccion_total_por_provincia)
+        self.analisis_menu.add_command(label="Evolución de Cultivos por Campaña", command=self.evolucion_cultivos_por_campaña)
+        self.analisis_menu.add_command(label="Tendencias de Producción por Cultivo", command=self.tendencias_produccion_por_cultivo)
+        self.analisis_menu.add_command(label="Predicción de Tendencias con IA", command=self.prediccion_tendencias_ia)
+        self.analisis_menu.add_command(label="Análisis Predictivo con Red Neuronal", command=self.analisis_predictivo_nn)
+        self.analisis_menu.add_command(label="Producción Top Cultivos", command=self.produccion_top_cultivos)
+        self.analisis_menu.add_command(label="Gráficos de Evolución", command=self.graficos_evolucion)
+
+        self.geocodificacion_menu = tk.Menu(self.menu, tearoff=0)
+        self.menu.add_cascade(label="Geocodificación", menu=self.geocodificacion_menu)
+        self.geocodificacion_menu.add_command(label="Geocodificar Direcciones", command=self.geocodificar_direcciones)
+        self.geocodificacion_menu.add_command(label="Generar Mapa", command=self.generar_mapa)
+
+    def cargar_csv(self):
+        """Carga un archivo CSV utilizando la clase FileHandler."""
+        self.df = FileHandler.cargar_csv()
+
+    def sumar_columnas(self):
+        """Genera una gráfica de la suma de las columnas numéricas."""
+        if self.df.empty:
+            messagebox.showwarning("Advertencia", "Por favor cargue un archivo CSV primero.")
+            return
+
+        suma_columnas = self.df.select_dtypes(include=[float, int]).sum()
+        title = "Suma de Columnas Numéricas"
+        output_file = OUTPUT_DIR / "suma_columnas.png"
+        Visualization.plot_bar_chart(suma_columnas, title, "Columnas", "Suma", output_file)
+
+        explanation = (
+            "Este informe muestra la suma total de todas las columnas numéricas del archivo CSV cargado. "
+            "Es útil para obtener una visión general de los datos y detectar posibles anomalías o valores atípicos."
+        )
+        messagebox.showinfo("Suma de Columnas", f"Gráfica guardada en {output_file}\n\n{explanation}")
+
+    def analisis_temporal(self):
+        """Genera un análisis temporal de la producción."""
+        if self.df.empty or 'campaña' not in self.df.columns:
+            messagebox.showwarning("Advertencia", "El archivo CSV debe contener la columna 'campaña'.")
+            return
+
+        if 'produccion' not in self.df.columns:
+            messagebox.showwarning("Advertencia", "El archivo CSV debe contener la columna 'produccion'.")
+            return
+
+        self.df['campaña_inicio'] = self.df['campaña'].apply(lambda x: int(x.split('/')[0]))
+        df_temporal = self.df.groupby(self.df['campaña_inicio']).sum(numeric_only=True)
+
+        plt.figure(figsize=(10, 6))
+        df_temporal.plot(y='produccion', kind='line')
+        plt.title("Análisis Temporal de Producción")
+        plt.ylabel("Producción [Tn]")
+        plt.xlabel("Año")
+        plt.tight_layout()
+
+        temporal_file = OUTPUT_DIR / "analisis_temporal.png"
+        plt.savefig(temporal_file)
+        plt.show()
+        logging.info(f"Gráfica de análisis temporal guardada en {temporal_file}")
+
+        explanation = (
+            "Este informe muestra la producción total de cultivos a lo largo del tiempo. "
+            "Permite identificar tendencias y patrones en la producción agrícola, lo cual es crucial para la planificación y toma de decisiones estratégicas."
+        )
+        messagebox.showinfo("Análisis Temporal", f"Gráfica guardada en {temporal_file}\n\n{explanation}")
+
+    def analisis_correlacion(self):
+        """Genera una matriz de correlación entre las columnas numéricas del DataFrame."""
+        if self.df.empty:
+            messagebox.showwarning("Advertencia", "El DataFrame está vacío. Por favor, cargue un archivo CSV primero.")
+            return
+
+        if self.df.select_dtypes(include=[float, int]).empty:
+            messagebox.showwarning("Advertencia", "No hay columnas numéricas para analizar.")
+            return
+
+        plt.figure(figsize=(10, 8))
+        correlation_matrix = self.df.select_dtypes(include=[float, int]).corr()
+        sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt='.2f')
+        plt.title("Matriz de Correlación")
+        plt.tight_layout()
+
+        correlacion_file = OUTPUT_DIR / "matriz_correlacion.png"
+        plt.savefig(correlacion_file)
+        plt.show()
+        logging.info(f"Matriz de correlación guardada en {correlacion_file}")
+
+        explanation = (
+            "Esta matriz de correlación muestra la relación entre todas las columnas numéricas del DataFrame. "
+            "Es útil para identificar variables que están fuertemente correlacionadas y aquellas que no lo están, lo cual puede ayudar en el análisis predictivo y la toma de decisiones."
+        )
+        messagebox.showinfo("Análisis de Correlación", f"Matriz de correlación guardada en {correlacion_file}\n\n{explanation}")
+
+    def correlacion_sup_sembrada_cosechada(self):
+        """Calcula y muestra la correlación entre superficie sembrada y cosechada."""
+        if self.df.empty or not {'provincia', 'sup_sembrada', 'sup_cosechada'}.issubset(self.df.columns):
+            messagebox.showwarning("Advertencia", "El archivo CSV debe contener las columnas 'provincia', 'sup_sembrada' y 'sup_cosechada'.")
+            return
+
+        provincias = self.df['provincia'].unique()
+        if len(provincias) == 0:
+            messagebox.showwarning("Advertencia", "No se encontraron provincias en el archivo CSV.")
+            return
+
+        normalized_provincias = [DataPreprocessing.normalize_text(p) for p in provincias]
+        selected_provincia_normalized = self.ask_option("Seleccionar Provincia", "Seleccione la provincia:", normalized_provincias)
+        selected_provincia = DataPreprocessing.denormalize_text(selected_provincia_normalized, provincias)
+        logging.info(f"Provincia seleccionada: {selected_provincia}")
+
+        if not selected_provincia:
+            return
+
+        df_provincia = self.df[self.df['provincia'] == selected_provincia]
+        df_provincia[['sup_sembrada', 'sup_cosechada']] = df_provincia[['sup_sembrada', 'sup_cosechada']].apply(pd.to_numeric, errors='coerce')
+        df_provincia = df_provincia.dropna(subset=['sup_sembrada', 'sup_cosechada'])
+
+        if df_provincia.empty:
+            messagebox.showwarning("Advertencia", "No se encontraron datos válidos para calcular la correlación.")
+            return
+
+        try:
+            correlacion = df_provincia[['sup_sembrada', 'sup_cosechada']].corr().iloc[0, 1]
+            suggestion = self.get_correlation_suggestion(correlacion)
+            explanation = (
+                f"La correlación entre la superficie sembrada y cosechada en la provincia seleccionada es {correlacion:.2f}. "
+                f"{suggestion}"
+            )
+            messagebox.showinfo("Correlación Sup. Sembrada-Sup. Cosechada", explanation)
+        except Exception as e:
+            logging.error(f"Error al calcular la correlación: {e}")
+            messagebox.showerror("Error", f"Ocurrió un error al calcular la correlación: {e}")
+
+    @staticmethod
+    def get_correlation_suggestion(correlacion):
+        """Devuelve una sugerencia basada en el valor de la correlación."""
+        if correlacion >= 0.7:
+            return "Correlación alta. Sugerencia: Explorar variedades de cultivos que optimicen la superficie cosechada."
+        elif correlacion <= 0.3:
+            return "Correlación baja. Sugerencia: Revisar prácticas de cultivo y factores ambientales."
+        else:
+            return "Correlación moderada. Considerar diversificación de cultivos."
+
+    def produccion_total_por_provincia(self):
+        """Genera una gráfica de la producción total por provincia."""
+        if self.df.empty or not {'provincia', 'produccion', 'campaña'}.issubset(self.df.columns):
+            messagebox.showwarning("Advertencia", "El archivo CSV debe contener las columnas 'provincia', 'produccion' y 'campaña'.")
+            return
+
+        # Ajuste del formato de la campaña
+        self.df['campaña_inicio'] = self.df['campaña'].apply(lambda x: int(x.split('/')[0]))
+
+        campañas = self.df['campaña_inicio'].unique()
+        if len(campañas) == 0:
+            messagebox.showwarning("Advertencia", "No se encontraron campañas en el archivo CSV.")
+            return
+
+        campañas_limpias = [str(campaña).strip() for campaña in campañas]
+
+        selected_campaña = self.ask_option("Seleccionar Campaña", "Seleccione la campaña:", campañas_limpias)
+        if not selected_campaña:
+            return
+
+        df_campaña = self.df[self.df['campaña_inicio'] == int(selected_campaña)]
+        produccion_por_provincia = df_campaña.groupby('provincia')['produccion'].sum().sort_values(ascending=False)
+
+        if produccion_por_provincia.empty:
+            messagebox.showwarning("Advertencia", "No se encontraron datos para la campaña seleccionada.")
+            return
+
+        title = f"Producción Total por Provincia - Campaña {selected_campaña}"
+        output_file = OUTPUT_DIR / f"produccion_por_provincia_{self.safe_file_name(selected_campaña)}.png"
+        Visualization.plot_bar_chart(produccion_por_provincia, title, "Provincias", "Producción [Tn]", output_file)
+
+        explanation = (
+            "Este informe muestra la producción total de cultivos por provincia para la campaña seleccionada. "
+            "Permite identificar qué provincias tienen mayor y menor producción, lo cual puede ayudar en la toma de decisiones "
+            "para la distribución de recursos y planificación agrícola."
+        )
+        messagebox.showinfo("Producción Total por Provincia", f"Gráfica guardada en {output_file}\n\n{explanation}")
+
+    def evolucion_cultivos_por_campaña(self):
+        """Genera un gráfico de la evolución de los cultivos por campaña."""
+        if self.df.empty or not {'campaña', 'cultivo'}.issubset(self.df.columns):
+            messagebox.showwarning("Advertencia", "El archivo CSV debe contener las columnas 'campaña' y 'cultivo'.")
+            return
+
+        self.df['cultivo'] = self.df['cultivo'].apply(DataPreprocessing.normalize_text)
+        columnas_interes = ['sup_sembrada', 'sup_cosechada', 'produccion']
+        columnas_presentes = [col for col in columnas_interes if col in self.df.columns]
+        if not columnas_presentes:
+            messagebox.showwarning("Advertencia", f"El archivo CSV debe contener al menos una de las columnas: {', '.join(columnas_interes)}.")
+            return
+
+        self.df['campaña_inicio'] = self.df['campaña'].apply(lambda x: int(x.split('/')[0]))
+
+        cultivos = sorted(self.df['cultivo'].unique(), key=lambda x: x.lower())
+        cultivo_seleccionado = self.ask_option("Seleccionar Cultivo", "Seleccione el cultivo:", cultivos)
+        if not cultivo_seleccionado:
+            return
+
+        cultivo_seleccionado = DataPreprocessing.denormalize_text(DataPreprocessing.normalize_text(cultivo_seleccionado), cultivos)
+
+        df_filtrado = self.df[self.df['cultivo'] == cultivo_seleccionado]
+        if df_filtrado.empty:
+            messagebox.showwarning("Advertencia", f"No se encontraron datos para el cultivo seleccionado: {cultivo_seleccionado}.")
+            return
+
+        plt.figure(figsize=(12, 8))
+        for columna in columnas_presentes:
+            df_filtrado.groupby('campaña_inicio')[columna].sum().plot(label=columna)
+
+        plt.title(f"Evolución del Cultivo {cultivo_seleccionado} por Campaña")
+        plt.xlabel("Año")
+        plt.ylabel("Cantidad")
+        plt.legend()
+        plt.tight_layout()
+
+        evolucion_file = OUTPUT_DIR / f"evolucion_cultivo_{cultivo_seleccionado}.png"
+        plt.savefig(evolucion_file)
+        plt.show()
+        logging.info(f"Gráfica de evolución de cultivo guardada en {evolucion_file}")
+
+        explanation = (
+            f"Este informe muestra la evolución del cultivo {cultivo_seleccionado} a lo largo de las campañas. "
+            "Puede ayudar a entender cómo ha variado la superficie sembrada, cosechada o la producción a lo largo del tiempo."
+        )
+        messagebox.showinfo("Evolución de Cultivo por Campaña", f"Gráfica guardada en {evolucion_file}\n\n{explanation}")
+
+    def tendencias_produccion_por_cultivo(self):
+        """Genera un gráfico de tendencias de producción por cultivo y campaña."""
+        if self.df.empty or not {'campaña', 'cultivo', 'produccion'}.issubset(self.df.columns):
+            messagebox.showwarning("Advertencia", "El archivo CSV debe contener las columnas 'campaña', 'cultivo' y 'produccion'.")
+            return
+
+        plt.figure(figsize=(12, 8))
+
+        for cultivo in self.df['cultivo'].unique():
+            subset = self.df[self.df['cultivo'] == cultivo]
+            plt.plot(subset['campaña_inicio'], subset['produccion'], label=cultivo)
+
+        plt.title('Tendencias de Producción por Cultivo y Campaña')
+        plt.xlabel('Campaña')
+        plt.ylabel('Producción (en toneladas métricas)')
+        plt.xticks(rotation=45)
+        plt.legend(title='Cultivo')
+        plt.grid(True)
+        plt.tight_layout()
+
+        tendencias_file = OUTPUT_DIR / "tendencias_produccion.png"
+        plt.savefig(tendencias_file)
+        plt.show()
+        logging.info(f"Gráfica de tendencias de producción guardada en {tendencias_file}")
+
+        explanation = (
+            "Este informe muestra las tendencias de producción para cada cultivo a lo largo de las campañas. "
+            "Permite visualizar cómo la producción ha evolucionado en el tiempo, lo cual es crucial para la planificación futura."
+        )
+        messagebox.showinfo("Tendencias de Producción por Cultivo", f"Gráfica guardada en {tendencias_file}\n\n{explanation}")
+
+    def modelos_predictivos(self):
+        """Entrena y evalúa un modelo de regresión lineal."""
+        if self.df.empty or not {'sup_sembrada', 'produccion'}.issubset(self.df.columns):
+            messagebox.showwarning("Advertencia", "El DataFrame debe contener 'sup_sembrada' y 'produccion'.")
+            return
+
+        # Eliminación de filas con valores NaN en las columnas 'sup_sembrada' y 'produccion'
+        df_filtered = self.df.dropna(subset=['sup_sembrada', 'produccion'])
+
+        X = df_filtered[['sup_sembrada']].values
+        y = df_filtered['produccion'].values
+
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        model = LinearRegression()
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+
+        mse = mean_squared_error(y_test, y_pred)
+        r2 = r2_score(y_test, y_pred)
+
+        explanation = (
+            f"Este análisis utiliza un modelo de regresión lineal para predecir la producción en función de la superficie sembrada. "
+            f"El error cuadrático medio (MSE) es {mse:.2f}, lo que indica el promedio de los errores cuadrados entre los valores predichos y reales. "
+            f"El coeficiente de determinación (R2) es {r2:.2f}, lo que muestra qué tan bien los datos se ajustan al modelo."
+        )
+        messagebox.showinfo("Modelo Predictivo", explanation)
+
+    def clasificacion_cultivos(self):
+        """Entrena y evalúa un modelo de clasificación de cultivos."""
+        if self.df.empty or not {'sup_sembrada', 'cultivo'}.issubset(self.df.columns):
+            messagebox.showwarning("Advertencia", "El DataFrame debe contener 'sup_sembrada' y 'cultivo'.")
+            return
+
+        X = self.df[['sup_sembrada']].values
+        y = self.df['cultivo'].values
+
+        label_encoder = LabelEncoder()
+        y_encoded = label_encoder.fit_transform(y)
+
+        X_train, X_test, y_train, y_test = train_test_split(X, y_encoded, test_size=0.2, random_state=42)
+
+        classifier = RandomForestClassifier(n_estimators=100, random_state=42)
+        classifier.fit(X_train, y_train)
+        y_pred = classifier.predict(X_test)
+
+        accuracy = classifier.score(X_test, y_test)
+
+        explanation = (
+            f"Este análisis utiliza un modelo de clasificación de bosques aleatorios para predecir el tipo de cultivo en función de la superficie sembrada. "
+            f"La precisión del modelo es del {accuracy:.2f}, lo que indica la proporción de predicciones correctas realizadas por el modelo."
+        )
+        messagebox.showinfo("Clasificación de Cultivos", explanation)
+
+    def prediccion_tendencias_ia(self):
+        """Predice tendencias utilizando un modelo avanzado de IA (SVR)."""
+        if self.df.empty or not {'campaña', 'sup_sembrada', 'sup_cosechada'}.issubset(self.df.columns):
+            messagebox.showwarning("Advertencia", "El DataFrame debe contener las columnas 'campaña', 'sup_sembrada', y 'sup_cosechada'.")
+            return
+
+        # Corrección de columnas y cálculo de producción
+        self.df['campaña_inicio'] = self.df['campaña'].apply(lambda x: int(x.split('/')[0]))
+        self.df['produccion'] = self.df['sup_sembrada'] - self.df['sup_cosechada']
+
+        X = self.df[['campaña_inicio']].values
+        y = self.df['produccion'].values
+
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        # Predicción con Support Vector Regression (SVR)
+        model = SVR(kernel='rbf', C=100, gamma=0.1, epsilon=.1)
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+
+        mse = mean_squared_error(y_test, y_pred)
+        r2 = r2_score(y_test, y_pred)
+
+        explanation = (
+            f"Este análisis utiliza un modelo avanzado de Support Vector Regression (SVR) para predecir la producción agrícola. "
+            f"El error cuadrático medio (MSE) es {mse:.2f}, y el coeficiente de determinación (R2) es {r2:.2f}, lo que muestra qué tan bien los datos se ajustan al modelo."
+        )
+        messagebox.showinfo("Predicción de Tendencias con IA", explanation)
+
+    def analisis_predictivo_nn(self):
+        """Realiza un análisis predictivo utilizando una red neuronal simple."""
+        if self.df.empty or not {'sup_sembrada', 'sup_cosechada', 'rendimiento', 'produccion'}.issubset(self.df.columns):
+            messagebox.showwarning("Advertencia", "El DataFrame debe contener las columnas 'sup_sembrada', 'sup_cosechada', 'rendimiento' y 'produccion'.")
+            return
+
+        # Preparar datos
+        features = self.df[['sup_sembrada', 'sup_cosechada', 'rendimiento']]
+        target = self.df['produccion']
+
+        # Escalado de características
+        scaler = MinMaxScaler()
+        features_scaled = scaler.fit_transform(features)
+        target_scaled = scaler.fit_transform(target.values.reshape(-1, 1)).ravel()
+
+        # Dividir datos
+        X_train, X_test, y_train, y_test = train_test_split(features_scaled, target_scaled, test_size=0.2, random_state=42)
+
+        # Construir modelo de red neuronal
+        model = tf.keras.models.Sequential([
+            tf.keras.layers.Dense(10, activation='relu', input_shape=(3,)),
+            tf.keras.layers.Dense(8, activation='relu'),
+            tf.keras.layers.Dense(1)
+        ])
+
+        # Compilar modelo
+        model.compile(optimizer='adam', loss='mean_squared_error')
+
+        # Entrenar modelo
+        model.fit(X_train, y_train, epochs=100, validation_split=0.2)
+
+        # Evaluar modelo
+        loss = model.evaluate(X_test, y_test)
+        logging.info(f"Pérdida en el conjunto de prueba: {loss}")
+
+        # Predicciones
+        predictions = model.predict(X_test)
+        predictions_rescaled = scaler.inverse_transform(predictions)  # Reescalar las predicciones al rango original
+
+        # Mostrar algunas predicciones
+        logging.info(f"Algunas predicciones reescaladas: {predictions_rescaled[:5]}")
+
+        explanation = (
+            "Este análisis utiliza una red neuronal simple para predecir la producción basada en la superficie sembrada, "
+            "superficie cosechada y rendimiento. Las predicciones se reescalan al rango original para interpretación."
+        )
+        messagebox.showinfo("Análisis Predictivo con Red Neuronal", explanation)
+
+    def graficos_evolucion(self):
+        """Genera gráficos de evolución de la superficie sembrada y cosechada, producción, y rendimiento promedio por campaña."""
+        if self.df.empty or not {'campaña', 'sup_sembrada', 'sup_cosechada', 'produccion', 'rendimiento'}.issubset(self.df.columns):
+            messagebox.showwarning("Advertencia", "El archivo CSV debe contener las columnas 'campaña', 'sup_sembrada', 'sup_cosechada', 'produccion', y 'rendimiento'.")
+            return
+
+        Visualization.plot_evolution_by_campaign(self.df)
+
+    def geocodificar_direcciones(self):
+        """Geocodifica direcciones y guarda las coordenadas en el DataFrame."""
+        if self.df.empty or not {'departamento', 'provincia', 'pais'}.issubset(self.df.columns):
+            messagebox.showwarning("Advertencia", "El archivo CSV debe contener las columnas 'departamento', 'provincia' y 'pais'.")
+            return
+
+        def geocode_with_retry(address):
+            try:
+                location = geolocator.geocode(address)
+                return location
+            except (GeocoderTimedOut, GeocoderServiceError):
+                sleep(1)
+                return geocode_with_retry(address)
+
+        latitudes = []
+        longitudes = []
+        addresses = []
+
+        for _, row in self.df.iterrows():
+            address = f"{row['departamento']}, {row['provincia']}, {row['pais']}"
+            location = geocode_with_retry(address)
+            if location:
+                latitudes.append(location.latitude)
+                longitudes.append(location.longitude)
+                addresses.append(location.address)
+            else:
+                latitudes.append(None)
+                longitudes.append(None)
+                addresses.append(None)
+
+        self.df['Latitude'] = latitudes
+        self.df['Longitude'] = longitudes
+        self.df['GeocodedAddress'] = addresses
+
+        geocoded_file = OUTPUT_DIR / "geocodificado.csv"
+        self.df.to_csv(geocoded_file, index=False)
+        logging.info(f"Archivo CSV geocodificado guardado en {geocoded_file}")
+
+        explanation = (
+            "Este proceso geocodifica las direcciones de las localidades, agregando coordenadas geográficas (latitud y longitud) "
+            "al DataFrame. Esto es útil para análisis geoespaciales y visualización de datos en mapas."
+        )
+        messagebox.showinfo("Geocodificación", f"Geocodificación completada. Archivo guardado en {geocoded_file}\n\n{explanation}")
+
+    def generar_mapa(self):
+        """Genera un mapa con las direcciones geocodificadas."""
+        if self.df.empty or not {'Latitude', 'Longitude'}.issubset(self.df.columns):
+            messagebox.showwarning("Advertencia", "Por favor, geocodifique las direcciones primero.")
+            return
+
+        centro = [self.df['Latitude'].mean(), self.df['Longitude'].mean()]
+        mapa = folium.Map(location=centro, zoom_start=6)
+
+        for _, row in self.df.iterrows():
+            if pd.notna(row['Latitude']) and pd.notna(row['Longitude']):
+                folium.Marker(
+                    location=[row['Latitude'], row['Longitude']],
+                    popup=row['GeocodedAddress'],
+                ).add_to(mapa)
+
+        mapa_file = OUTPUT_DIR / "mapa_geoespacial.html"
+        mapa.save(mapa_file)
+        logging.info(f"Mapa geoespacial guardado en {mapa_file}")
+
+        webbrowser.open(mapa_file.resolve().as_uri())
+
+        explanation = (
+            "Este informe genera un mapa interactivo con las direcciones geocodificadas. "
+            "Es útil para visualizar la distribución geográfica de los datos y realizar análisis espaciales."
+        )
+        messagebox.showinfo("Generar Mapa", f"Mapa generado exitosamente.\n\n{explanation}")
+
+    def produccion_top_cultivos(self):
+        """Genera un gráfico de líneas para los 4 principales cultivos por producción total."""
+        if self.df.empty or not {'cultivo', 'campaña', 'produccion'}.issubset(self.df.columns):
+            messagebox.showwarning("Advertencia", "El archivo CSV debe contener las columnas 'cultivo', 'campaña' y 'produccion'.")
+            return
+
+        # Agrupar los datos por cultivo y campaña, y sumar la producción
+        self.df['campaña_inicio'] = self.df['campaña'].apply(lambda x: int(x.split('/')[0]))
+        grouped_data = self.df.groupby(['cultivo', 'campaña_inicio'])['produccion'].sum().reset_index()
+
+        # Obtener los 4 principales cultivos por producción total
+        top_cultivos = grouped_data.groupby('cultivo')['produccion'].sum().nlargest(4).index
+
+        # Filtrar los datos para incluir solo los 4 cultivos principales
+        filtered_data = grouped_data[grouped_data['cultivo'].isin(top_cultivos)]
+
+        # Crear un gráfico de líneas que muestre la producción por campaña para los 4 cultivos principales
+        plt.figure(figsize=(12, 8))
+        for cultivo in top_cultivos:
+            cultivo_data = filtered_data[filtered_data['cultivo'] == cultivo]
+            plt.plot(cultivo_data['campaña_inicio'], cultivo_data['produccion'], marker='o', label=cultivo)
+
+        plt.title('Producción de los 4 principales cultivos por campaña')
+        plt.xlabel('Campaña')
+        plt.ylabel('Producción (en toneladas)')
+        plt.xticks(rotation=45)
+        plt.legend(title='Cultivo')
+        plt.grid(True)
+        plt.tight_layout()
+
+        output_file = OUTPUT_DIR / "produccion_top_cultivos.png"
+        plt.savefig(output_file)
+        plt.show()
+        logging.info(f"Gráfica de producción de los 4 principales cultivos guardada en {output_file}")
+
+        explanation = (
+            "Este análisis muestra la evolución de la producción de los 4 principales cultivos a lo largo de las campañas. "
+            "Permite visualizar cuáles cultivos han tenido mayor producción en diferentes períodos, ayudando en la planificación y toma de decisiones."
+        )
+        messagebox.showinfo("Producción Top Cultivos", f"Gráfica guardada en {output_file}\n\n{explanation}")
+
+    def mostrar_dialogo_informes(self):
+        """Muestra un cuadro de diálogo para seleccionar y generar informes."""
+        informes = ["Producción Total por Provincia", "Correlación Sup. Sembrada-Sup. Cosechada", "Sumar Columnas",
+                    "Análisis Temporal", "Análisis de Correlación", "Modelos Predictivos",
+                    "Clasificación de Cultivos", "Evolución de Cultivos por Campaña",
+                    "Tendencias de Producción por Cultivo", "Predicción de Tendencias con IA",
+                    "Análisis Predictivo con Red Neuronal", "Producción Top Cultivos"]
+
+        selected_informe = self.ask_option("Generar Informe", "Seleccione el informe a generar:", informes)
+        if selected_informe:
+            getattr(self, self.get_function_name_from_report(selected_informe))()
+
+    @staticmethod
+    def get_function_name_from_report(report_name):
+        """Devuelve el nombre de la función correspondiente a un informe seleccionado."""
+        function_mapping = {
+            "Producción Total por Provincia": "produccion_total_por_provincia",
+            "Correlación Sup. Sembrada-Sup. Cosechada": "correlacion_sup_sembrada_cosechada",
+            "Sumar Columnas": "sumar_columnas",
+            "Análisis Temporal": "analisis_temporal",
+            "Análisis de Correlación": "analisis_correlacion",
+            "Modelos Predictivos": "modelos_predictivos",
+            "Clasificación de Cultivos": "clasificacion_cultivos",
+            "Evolución de Cultivos por Campaña": "evolucion_cultivos_por_campaña",
+            "Tendencias de Producción por Cultivo": "tendencias_produccion_por_cultivo",
+            "Predicción de Tendencias con IA": "prediccion_tendencias_ia",
+            "Análisis Predictivo con Red Neuronal": "analisis_predictivo_nn",
+            "Producción Top Cultivos": "produccion_top_cultivos",
+        }
+        return function_mapping.get(report_name, "")
+
+    def ask_option(self, title, message, options):
+        """Muestra un cuadro de diálogo para seleccionar una opción."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.geometry("250x150")
+        dialog.resizable(False, False)
+
+        label = tk.Label(dialog, text=message)
+        label.pack(pady=10)
+
+        combobox_value = tk.StringVar()
+        combobox = ttk.Combobox(dialog, textvariable=combobox_value, values=options)
+        combobox.pack(pady=10)
+        combobox.current(0)
+
+        button = ttk.Button(dialog, text="Aceptar", command=dialog.destroy)
+        button.pack(pady=10)
+
+        dialog.grab_set()
+        dialog.wait_window()
+
+        selected_option = combobox_value.get()
+        return selected_option
+
+    @staticmethod
+    def safe_file_name(name):
+        """Devuelve un nombre de archivo seguro para usar en el sistema de archivos."""
+        return re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')
+
+
+if __name__ == "__main__":
+    app = DataAnalyzer()
+    app.root.mainloop()
